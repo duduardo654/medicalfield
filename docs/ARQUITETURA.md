@@ -115,17 +115,18 @@ servidor responder que persistiu.
 | 7 | Singleton | Pool de conexões (`db.py`, `pg.Pool`, `sql.DB`) | Uma instância de conexão por processo |
 | + | Outbox *(padrão de integração)* | Tabela `outbox` | Garante entrega *at-least-once* + idempotência |
 
-Etapa 1 já entrega: Repository, Singleton e Chain of Responsibility (no auth-service).
+Já implementados: Repository, Singleton e Chain of Responsibility (auth e core); Strategy e Factory (`core/src/sync/conflictStrategies.js`); Adapter (`business/mailer.go` isola o SMTP). Faltam no cliente: Observer, Facade e Repository local/remoto.
 
 ## 8. Cobertura dos requisitos do PDF do professor
 
 | Requisito | Situação |
 |---|---|
-| 3 serviços em linguagens distintas | Python + Node.js + Go (auth ✅ nesta etapa) |
+| 3 serviços em linguagens distintas | Python ✅ + Node.js ✅ + Go ✅ |
 | Persistência dual (central + local) | PostgreSQL ✅ · SQLite (Etapa 5) |
-| Rotas autenticadas, exceto login | ✅ no auth (`/docs` é a única exceção, desligável com `ENABLE_DOCS=false`) |
-| Logs: data/hora, IP, profissional, método, rota, status, ms | ✅ no auth (arquivo + `audit.access_log`) |
+| Rotas autenticadas, exceto login | ✅ auth e core (`/docs` é a única exceção, desligável com `ENABLE_DOCS=false`) |
+| Logs: data/hora, IP, profissional, método, rota, status, ms | ✅ auth e core (arquivo + `audit.access_log`) |
 | Glasgow, Manchester, START, medicamentos administrados | ✅ modelados em `core.atendimento` |
 | Receber dados do Portal (pull) e medicamentos inseridos via SQL | ✅ `updated_at` + trigger em `business.medicamento` |
-| `POST /log` (logs offline) | Etapa 2 |
-| PDF, e-mail, GUIs, simulador ONLINE/OFFLINE, deploy | Etapas 3 a 7 |
+| `POST /log` (logs offline) | ✅ core (idempotente) |
+| PDF e e-mail com anexo | ✅ business (Go) + Mailpit |
+| GUIs, simulador ONLINE/OFFLINE, Swagger unificado, deploy | Etapas 4 a 7 |
