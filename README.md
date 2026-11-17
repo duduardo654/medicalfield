@@ -55,3 +55,21 @@ Scripts locais preparados: `scripts/iniciar-linux.sh` e `scripts/instalar-system
 **Atenção:** o modo ONLINE é um simulador de conectividade, não uma garantia de rede real;
 confirmação de gravação depende da resposta do Core. O arquivo `.env` local não está incluso
 na distribuição. Não foi efetuado acesso SSH à VM nem envio de e-mails reais.
+
+
+## Etapa 7 — Ajustes após validação dos CRUDs
+
+Confira `docs/ETAPA7.md` para confirmação dos cadastros, origem ONLINE/OFFLINE, lista de medicamentos, auditoria, testes de endpoints e sincronização de recebimento.
+
+## Etapa 8: correção de medicamentos
+
+Consulte [`docs/ETAPA8.md`](docs/ETAPA8.md) para corrigir o erro “Medicamentos: Entidade inválida” e validar o cache offline.
+
+## Etapa 9
+
+Confirmação visual de sincronização e procedimento de teste de falha/recuperação: consulte [`docs/ETAPA9.md`](docs/ETAPA9.md).
+
+
+### Etapa 10 — Sincronização manual
+
+A troca OFFLINE → ONLINE **não** sincroniza automaticamente. O botão **Sincronizar agora** é o único disparador de envio de pendências e recebimento remoto de dados. Leia `docs/ETAPA10.md` para o fluxo e testes.

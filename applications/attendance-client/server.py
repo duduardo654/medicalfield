@@ -270,7 +270,26 @@ def set_mode(mode: Mode, authorization: str | None = Header(default=None)):
     with database() as db:
         db.execute("INSERT INTO metadata(chave,valor) VALUES('online',?) ON CONFLICT(chave) DO UPDATE SET valor=excluded.valor",
                    ('1' if mode.online else '0',))
-    return {'online': mode.online, 'sincronizar': mode.online}
+    return {'online': mode.online}
+
+
+# Rotas específicas de medicamentos devem preceder a rota genérica /api/{entity}.
+@app.get('/api/medicamento')
+def local_medicamentos(authorization: str | None = Header(default=None)):
+    professional(authorization)
+    with database() as db:
+        return [json.loads(r['data']) for r in db.execute('SELECT data FROM medicamento ORDER BY id')]
+
+
+@app.post('/api/medicamento/cache')
+def cache_medicamentos(body: list[dict], authorization: str | None = Header(default=None)):
+    professional(authorization)
+    with database() as db:
+        require_online(db)
+        for item in body:
+            db.execute('INSERT INTO medicamento(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
+                       (item['id'], json.dumps(item, ensure_ascii=False)))
+    return {'salvos': len(body)}
 
 
 @app.get('/api/{entity}')
@@ -311,7 +330,10 @@ def new_record(body: Record, authorization: str | None = Header(default=None)):
             data['prontuario_id'] = pr['id']
         if entity == 'prontuario' and db.execute('SELECT 1 FROM prontuario WHERE pessoa_id=?', (data['pessoa_id'],)).fetchone():
             raise HTTPException(409, 'Esta pessoa já possui prontuário.')
-        save_local(db, entity, data)
+        # Origem representa o modo de criacao; nao o meio de transporte da Outbox.
+        modo_criacao = 'ONLINE' if online(db) else 'OFFLINE'
+        data['origem_registro'] = modo_criacao
+        save_local(db, entity, data, origem=modo_criacao)
         db.execute('''INSERT INTO outbox(op_id,entidade,registro_id,operacao,profissional_id,criado_em,payload,status)
             VALUES (?,?,?,?,?,?,?,?)''',
             (str(uuid.uuid4()), entity, data['id'], 'CREATE', user['sub'], now,
@@ -352,24 +374,6 @@ def new_record(body: Record, authorization: str | None = Header(default=None)):
                 aviso=('Registro salvo neste dispositivo e aguardando envio ao servidor.' if enabled else
                        'Registro salvo neste dispositivo. Será enviado quando a conexão voltar.') if not confirmed else
                       'Registro salvo e confirmado no servidor.')
-
-
-@app.get('/api/medicamento')
-def local_medicamentos(authorization: str | None = Header(default=None)):
-    professional(authorization)
-    with database() as db:
-        return [json.loads(r['data']) for r in db.execute('SELECT data FROM medicamento ORDER BY id')]
-
-
-@app.post('/api/medicamento/cache')
-def cache_medicamentos(body: list[dict], authorization: str | None = Header(default=None)):
-    professional(authorization)
-    with database() as db:
-        require_online(db)
-        for item in body:
-            db.execute('INSERT INTO medicamento(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
-                       (item['id'], json.dumps(item, ensure_ascii=False)))
-    return {'salvos': len(body)}
 
 
 @app.post('/api/sync')

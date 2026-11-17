@@ -144,7 +144,7 @@ class SyncService {
   async _pessoa(client, ctx) {
     const { op, id, responsavel, agora } = ctx;
     const data = validate(pessoaInput, { ...op.payload, id });
-    const incoming = { ...data, id, criado_por: responsavel, origem: 'OFFLINE', ...this._carimbos(data, op, agora) };
+    const incoming = { ...data, id, criado_por: responsavel, origem: (op.payload?.origem_registro === 'ONLINE' ? 'ONLINE' : 'OFFLINE'), ...this._carimbos(data, op, agora) };
 
     const existing = await pessoaRepo.findById(await this._canonico(client, id), client);
     if (existing) return this._reconciliar(client, 'pessoa', pessoaRepo, existing, incoming, data.base_version);
@@ -168,7 +168,7 @@ class SyncService {
     if (!(await pessoaRepo.findById(pessoaId, client))) {
       throw new SyncRejected('PESSOA_INEXISTENTE', `A pessoa ${data.pessoa_id} ainda não existe no servidor.`, true);
     }
-    const incoming = { ...data, id, pessoa_id: pessoaId, criado_por: responsavel, origem: 'OFFLINE', ...this._carimbos(data, op, agora) };
+    const incoming = { ...data, id, pessoa_id: pessoaId, criado_por: responsavel, origem: (op.payload?.origem_registro === 'ONLINE' ? 'ONLINE' : 'OFFLINE'), ...this._carimbos(data, op, agora) };
 
     const existing = await prontuarioRepo.findById(await this._canonico(client, id), client);
     if (existing) {
@@ -199,7 +199,7 @@ class SyncService {
       ...data, id, pessoa_id: pessoaId, prontuario_id: prontuario.id, profissional_id: responsavel,
       profissional_nome: data.profissional_nome || (responsavel === user.id ? user.nome : null),
       profissional_identificacao: data.profissional_identificacao || (responsavel === user.id ? user.identificacao : null),
-      origem: 'OFFLINE', ...this._carimbos(data, op, agora),
+      origem: (op.payload?.origem_registro === 'ONLINE' ? 'ONLINE' : 'OFFLINE'), ...this._carimbos(data, op, agora),
     };
     const extras = async (campos) => {
       if (campos.includes('medicamentos') && incoming.medicamentos) await atendimentoRepo.replaceMedicamentos(id, incoming.medicamentos, client);

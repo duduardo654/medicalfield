@@ -35,6 +35,7 @@ class ClienteOfflineTest(unittest.TestCase):
         p=self.post('/api/record',{'entidade':'pessoa','dados':{'nome':'Paciente Fictício'}})
         self.assertEqual(p.status_code,200,p.text)
         pid=p.json()['id']
+        self.assertEqual(p.json()['origem_registro'], 'OFFLINE')
         pr=self.post('/api/record',{'entidade':'prontuario','dados':{'pessoa_id':pid,'alergias':'Nenhuma'}})
         self.assertEqual(pr.status_code,200,pr.text)
         at=self.post('/api/record',{'entidade':'atendimento','dados':{'pessoa_id':pid,'queixa_principal':'Dor'}})
@@ -52,6 +53,7 @@ class ClienteOfflineTest(unittest.TestCase):
         def fake_remote(method, path, token, data=None):
             calls.append((method, path))
             if path == '/sync/push':
+                self.assertEqual(data['operacoes'][0]['payload']['origem_registro'], 'OFFLINE')
                 return {'resultados':[{'op_id':data['operacoes'][0]['op_id'], 'resultado':'APPLIED',
                                        'canonical_id':created['id']} ]}
             if path.startswith('/sync/pull'):
@@ -72,11 +74,15 @@ class ClienteOfflineTest(unittest.TestCase):
     def test_online_saves_central_with_confirmation(self):
         def fake_remote(method, path, token, data=None):
             self.assertEqual(path, '/sync/push')
+            self.assertEqual(data['operacoes'][0]['payload']['origem_registro'], 'ONLINE')
             return {'resultados': [{'resultado': 'APPLIED'}]}
         with patch.object(self.m, 'remote', side_effect=fake_remote):
             result = self.post('/api/record', {'entidade':'pessoa','dados':{'nome':'Pessoa online'}})
         self.assertEqual(result.status_code, 200, result.text)
         self.assertTrue(result.json()['confirmado'])
+        self.assertEqual(result.json()['origem_registro'], 'ONLINE')
+        with self.m.database() as db:
+            self.assertEqual(db.execute('SELECT origem FROM pessoa WHERE id=?', (result.json()['id'],)).fetchone()['origem'], 'ONLINE')
         self.assertEqual(result.json()['_status'], 'SINCRONIZADO')
         self.assertEqual(self.client.get('/api/state', headers=self.headers).json()['pendentes'], 0)
 
@@ -107,6 +113,49 @@ class ClienteOfflineTest(unittest.TestCase):
             self.assertEqual(gw.call_args.args[:3], ('core','/pessoa','GET'))
             self.post('/api/network',{'online':False})
             self.assertEqual(self.client.get('/api/central/pessoa',headers=headers).status_code,409)
+
+    def test_medicamentos_cache_e_consulta_online_offline(self):
+        med = {'id': '11111111-1111-4111-8111-111111111111',
+               'nome': 'Medicamento Teste Sync', 'apresentacao': 'Solução de teste', 'ativo': True}
+        with patch.object(self.m, 'gateway', return_value=[med]) as gateway:
+            resposta = self.client.get('/api/medicamentos/remotos', headers=self.headers)
+        self.assertEqual(resposta.status_code, 200, resposta.text)
+        self.assertEqual(resposta.json()[0]['nome'], med['nome'])
+        self.assertEqual(gateway.call_args.args[:3], ('business', '/medicamento', 'GET'))
+        salvo = self.post('/api/medicamento/cache', [med])
+        self.assertEqual(salvo.status_code, 200, salvo.text)
+        self.assertEqual(salvo.json()['salvos'], 1)
+        resultado = self.client.get('/api/medicamento', headers=self.headers)
+        self.assertEqual(resultado.status_code, 200, resultado.text)
+        self.assertEqual(resultado.json(), [med])
+        self.post('/api/network', {'online': False})
+        self.assertEqual(self.client.get('/api/medicamento', headers=self.headers).json(), [med])
+        self.assertEqual(self.client.get('/api/medicamentos/remotos', headers=self.headers).status_code, 409)
+
+    def test_falha_na_sincronizacao_preserva_pendencia_e_retenta(self):
+        self.post('/api/network', {'online': False})
+        created = self.post('/api/record', {'entidade':'pessoa','dados':{'nome':'Pessoa aguardando retorno'}}).json()
+        self.post('/api/network', {'online': True})
+        with patch.object(self.m, 'remote', side_effect=self.m.HTTPException(503, 'Core indisponível')):
+            failure = self.post('/api/sync', {})
+        self.assertNotEqual(failure.status_code, 200)
+        with self.m.database() as db:
+            row=db.execute('SELECT status,tentativas FROM outbox WHERE registro_id=?',(created['id'],)).fetchone()
+            self.assertNotEqual(row['status'], 'SINCRONIZADO')
+            self.assertEqual(row['tentativas'], 0)  # Transação de sincronização abortada sem confirmação de pull
+        def recovered_remote(method, path, token, data=None):
+            if path == '/sync/push':
+                return {'resultados':[{'resultado':'APPLIED','op_id':data['operacoes'][0]['op_id']}]}
+            if path.startswith('/sync/pull'):
+                return {'cursor':'2026-11-17T03:00:00Z','pessoas':[],'prontuarios':[],'atendimentos':[]}
+            if path == '/log':
+                return {'gravados':1}
+            raise AssertionError(path)
+        with patch.object(self.m, 'remote', side_effect=recovered_remote):
+            retry = self.post('/api/sync', {})
+        self.assertEqual(retry.status_code, 200,retry.text)
+        self.assertEqual(retry.json()['pendentes'],0)
+        self.assertEqual(self.client.get('/api/pessoa',headers=self.headers).json()[0]['_status'],'SINCRONIZADO')
 
     def test_auth_required(self):
         self.assertEqual(self.client.get('/api/pessoa').status_code,401)
