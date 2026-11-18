@@ -1,75 +1,40 @@
-# MedicalField – Prontuário Médico de Emergência
+# MedicalField — Prontuário Médico de Emergência
 
-Projeto acadêmico (Arquiteturas de Software – Univates 2026/B). Arquitetura completa em
-[`docs/ARQUITETURA.md`](docs/ARQUITETURA.md).
+Projeto acadêmico de Arquiteturas de Software (Univates 2026/B). Três APIs independentes em Python, Node.js e Go, com interface integrada e persistência dual PostgreSQL/SQLite. Dados exclusivamente fictícios.
 
-> **Status:** Etapa 5: interface integrada em uma porta web e três microsserviços internos. Testes locais do SQLite concluídos; integração real e envio SMTP permanecem pendentes de validação.
+## Acessar a instalação da VM
 
-## Etapa 5 — Aplicação integrada
+Iniciar na VM: `sudo systemctl start medicalfield-auth medicalfield-core medicalfield-business medicalfield-admin`.
 
-- **Endereço único do sistema:** `http://localhost:3000`.
-- Faça login uma vez com uma das credenciais fictícias abaixo. O profissional pode usar a área **Atendimento · SQLite**; um administrador também pode usar **Administração · PostgreSQL**.
-- A interface permite cadastrar pessoas, prontuários e atendimentos em SQLite, simular modo OFFLINE/ONLINE, sincronizar e consultar dados oficiais. Na aba administrativa também é possível editar ou excluir registros oficiais existentes, quando o banco permitir.
-- Os microsserviços Python (8001), Node.js (8002) e Go (8003) permanecem separados **internamente**, porém o navegador usa somente a porta 3000.
-- O Mailpit foi retirado do inicializador; envio de e-mail exige configuração SMTP real em `.env` e autorização do provedor de e-mail. **Sem credenciais SMTP, o envio não funciona.**
-- **Os dados locais da etapa 4** não são transportados automaticamente pelo ZIP: ao substituir a pasta, preserve o arquivo SQLite localizado em `applications/attendance-client/data/medicalfield.sqlite3` e seu `.env`.
-- Para Windows, feche todas as janelas da etapa anterior, inicie `iniciar-tudo.bat` e abra `http://localhost:3000`.
-- Guia detalhado: [`docs/ETAPA5.md`](docs/ETAPA5.md).
+No Windows:
+```powershell
+ssh -N -L 3000:127.0.0.1:3000 -L 8001:127.0.0.1:8001 -L 8002:127.0.0.1:8002 -L 8003:127.0.0.1:8003 univates@177.44.248.66
+```
+Aplicação: http://localhost:3000. Swagger: http://localhost:8001/docs, http://localhost:8002/docs, http://localhost:8003/docs.
 
-## Dependências do Windows
+Parar na VM: `sudo systemctl stop medicalfield-admin medicalfield-business medicalfield-core medicalfield-auth`.
 
-Python 3.12+, Node.js 18+, PostgreSQL com banco `medicalfield`, conforme as etapas anteriores. Use `iniciar-tudo.bat` na pasta raiz. Não execute `--reset` se deseja manter seus dados.
+O modo OFFLINE é simulado pela interface hospedada na VM; a troca de modo não sincroniza. Use o botão Sincronizar agora para enviar pendências e receber dados. Login e cadastro de medicamentos no portal requerem servidor disponível. No Windows, para desenvolvimento independente, utilize `iniciar-tudo.bat` com PostgreSQL local e `.env` próprios.
 
 ## Credenciais fictícias de demonstração
 
 | Identificação | Senha | Perfil |
 |---|---|---|
-| `ADMIN-001` | `admin123` | Administrador |
-| `CRM-RS-12345` | `medico123` | Profissional médico |
-| `COREN-RS-67890` | `enfer123` | Enfermagem |
-| `SOCORRISTA-0042` | `socor123` | Socorrista |
+| ADMIN-001 | admin123 | Administrador |
+| CRM-RS-12345 | medico123 | Profissional médico |
+| COREN-RS-67890 | enfer123 | Enfermagem |
+| SOCORRISTA-0042 | socor123 | Socorrista |
 
-## Testes
+Não expor essas credenciais em produção. Nunca versionar `.env`, senha SMTP ou JWT_SECRET. Não executar `setup.py --reset` em bancos que devam ser preservados.
 
-```
-services\auth-service\.venv\Scripts\python.exe -m unittest discover -s applications/attendance-client -p "test_*.py" -v
-```
+## Documentação
 
-As verificações do backend requerem execução e PostgreSQL devidamente configurados. Os arquivos originais `docs/API.md` e `docs/ARQUITETURA.md` documentam as APIs independentes. A atualização do endereço web está em `docs/ETAPA5.md`.
+- [Arquitetura, bancos, padrões, requisitos e limites](docs/ARQUITETURA.md)
+- [APIs e exemplos](docs/API.md)
+- [Implantação e operação](docs/IMPLANTACAO.md)
+- [Atualização final, segurança e testes](docs/FINALIZACAO.md)
+- Roteiro de apresentação: consultar o documento original da disciplina.
 
-## VM Linux
+## Validação
 
-Scripts locais preparados: `scripts/iniciar-linux.sh` e `scripts/instalar-systemd.sh`. A implantação remota ainda **não foi executada**, aguardando autorização. É recomendado que o SQLite do dispositivo local permaneça no Windows, e que a VM contenha o PostgreSQL e os microsserviços centrais.
-
-
-## Etapa 6 — Cadastro online e apresentação simplificada
-
-- Uma única interface em `http://localhost:3000` com login, atendimento e administração.
-- Cadastro ONLINE: o cliente registra a operação com UUID/Outbox local e a envia imediatamente
-  ao Core; só informa **confirmado no servidor** após resultado positivo da API (PostgreSQL).
-- Se o servidor falhar, mantém a operação pendente no SQLite para reenvio idempotente.
-- Cadastro OFFLINE: persiste localmente e não envia nada ao Core até a volta da conexão.
-- Nomes dos bancos foram retirados da tela; permanecem nesta documentação técnica.
-- SMTP Gmail: senha de app de 16 caracteres no `.env`, sem espaços e nunca no código ou ZIP.
-
-**Atenção:** o modo ONLINE é um simulador de conectividade, não uma garantia de rede real;
-confirmação de gravação depende da resposta do Core. O arquivo `.env` local não está incluso
-na distribuição. Não foi efetuado acesso SSH à VM nem envio de e-mails reais.
-
-
-## Etapa 7 — Ajustes após validação dos CRUDs
-
-Confira `docs/ETAPA7.md` para confirmação dos cadastros, origem ONLINE/OFFLINE, lista de medicamentos, auditoria, testes de endpoints e sincronização de recebimento.
-
-## Etapa 8: correção de medicamentos
-
-Consulte [`docs/ETAPA8.md`](docs/ETAPA8.md) para corrigir o erro “Medicamentos: Entidade inválida” e validar o cache offline.
-
-## Etapa 9
-
-Confirmação visual de sincronização e procedimento de teste de falha/recuperação: consulte [`docs/ETAPA9.md`](docs/ETAPA9.md).
-
-
-### Etapa 10 — Sincronização manual
-
-A troca OFFLINE → ONLINE **não** sincroniza automaticamente. O botão **Sincronizar agora** é o único disparador de envio de pendências e recebimento remoto de dados. Leia `docs/ETAPA10.md` para o fluxo e testes.
+O aluno confirmou a implantação Ubuntu, JWT, CRUD, sincronização manual, medicamentos, geração de PDF, SMTP e systemd. A atualização final exige instalar Zod 4.6.7 na VM, executar os testes unitários e recompilar Go. Consulte `docs/FINALIZACAO.md`. A documentação anterior das etapas é histórica e pode descrever arquiteturas superadas.

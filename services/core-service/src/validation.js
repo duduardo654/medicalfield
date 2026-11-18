@@ -14,7 +14,7 @@ function validate(schema, data) {
 const emptyToNull = (v) => (typeof v === 'string' && v.trim() === '' ? null : v);
 const toNumber = (v) => (v === '' ? null : typeof v === 'string' && v.trim() !== '' && !Number.isNaN(Number(v)) ? Number(v) : v);
 
-const uuid = z.string().uuid();
+const uuid = z.guid(); // preserva UUIDs legados aceitos pelo Zod 3
 const ts = z.string().datetime({ offset: true });
 const optStr = (max = 500) => z.preprocess(emptyToNull, z.string().trim().max(max).nullable().optional());
 const optTs = z.preprocess(emptyToNull, ts.nullable().optional());
@@ -98,7 +98,7 @@ const syncEnvelope = z.object({
   registro_id: uuid.optional(),
   profissional_id: uuid.optional(),
   client_created_at: optTs,
-  payload: z.record(z.any()),
+  payload: z.record(z.string(), z.any()),
 });
 
 const syncPushBody = z.object({ operacoes: z.array(z.any()).min(1).max(500) });

@@ -2,7 +2,7 @@ const config = require('./config');
 const { pool } = require('./db');
 const app = require('./app');
 
-const server = app.listen(config.port, '0.0.0.0', () => {
+const server = app.listen(config.port, '127.0.0.1', () => {
   console.log(`[core-service] ouvindo em http://localhost:${config.port}  (Swagger: /docs)`);
 });
 

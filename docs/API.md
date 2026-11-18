@@ -21,17 +21,17 @@ JWT HS256, claims: `sub, identificacao, nome, tipo, perfil, iat, exp, iss`. Vali
 | GET | `/pessoa?q=&limit=&offset=` | Lista/busca pessoas |
 | GET | `/pessoa/{id}` | Obtém pessoa |
 | POST | `/pessoa` | Cadastra (aceita `id` UUID do cliente; mesmo id = 200 idempotente; CPF repetido = 409) |
-| PUT | `/pessoa/{id}` | Atualiza (parcial) |
+| PUT | `/pessoa/{id}` | Atualiza (parcial, profissional autenticado) |
 | DELETE | `/pessoa/{id}` | **ADMIN**; 409 se houver prontuário |
 | GET | `/prontuario` | Todos os prontuários (com nome da pessoa) |
 | GET | `/prontuario/{id}` | Prontuário de uma pessoa |
 | POST | `/prontuario` | Cria (1 por pessoa; 409 se já existir; 422 se a pessoa não existir) |
-| PUT / DELETE | `/prontuario/{id}` | Atualiza / remove (**ADMIN**; 409 se houver atendimentos) |
+| PUT / DELETE | `/prontuario/{id}` | Atualiza (autenticado) / remove (**ADMIN**; 409 se houver atendimentos) |
 | GET | `/atendimento` | Todos os atendimentos (com nome da pessoa e medicamentos) |
 | GET | `/atendimento/{id}` | Atendimentos de uma pessoa |
 | GET | `/atendimento/detalhe/{atendimentoId}` | Um atendimento + pessoa + prontuário + medicamentos (usado pelo PDF) |
 | POST | `/atendimento` | Registra (profissional = usuário autenticado; exige prontuário) |
-| PUT / DELETE | `/atendimento/detalhe/{atendimentoId}` | Atualiza / remove (**ADMIN**) |
+| PUT / DELETE | `/atendimento/detalhe/{atendimentoId}` | Atualiza (autenticado) / remove (**ADMIN**) |
 | POST | `/sync/push` | Recebe a Outbox (ver abaixo) |
 | GET | `/sync/pull?since=` | Mudanças do servidor desde `since` |
 | POST | `/log` | Logs de acesso gerados offline (idempotente por `log_id`) |
@@ -56,11 +56,11 @@ Enviar em ordem: pessoa → prontuário → atendimento. Resposta (200) com o re
 ```
 | Resultado | Significado | O cliente deve |
 |---|---|---|
-| `APPLIED` | Persistido (COMMIT feito) | marcar `SYNCED` |
-| `DUPLICATE` | Já processado / registro idêntico | marcar `SYNCED` |
-| `MERGED` | Duplicata fundida (mesmo CPF / pessoa já tinha prontuário); `canonical_id` é o id oficial | marcar `SYNCED` e trocar o id local por `canonical_id` |
-| `CONFLICT_RESOLVED` | Divergência resolvida pela Strategy (`detalhe.estrategia`, `vencedor`, `campos`) | marcar `SYNCED` e fazer pull |
-| `REJECTED` | `retentavel: true` → dependência ainda ausente/erro temporário (reenviar depois, mesmo `op_id`); `false` → dado inválido (corrigir) | manter na fila / `ERROR` |
+| `APPLIED` | Persistido (COMMIT feito) | marcar `SINCRONIZADO` |
+| `DUPLICATE` | Já processado / registro idêntico | marcar `SINCRONIZADO` |
+| `MERGED` | Duplicata fundida (mesmo CPF / pessoa já tinha prontuário); `canonical_id` é o id oficial | marcar `SINCRONIZADO` ; a troca de todos os IDs locais por `canonical_id` permanece limitação do cliente atual |
+| `CONFLICT_RESOLVED` | Divergência resolvida pela Strategy (`detalhe.estrategia`, `vencedor`, `campos`) | marcar `SINCRONIZADO` e fazer pull |
+| `REJECTED` | `retentavel: true` → dependência ainda ausente/erro temporário (reenviar depois, mesmo `op_id`); `false` → dado inválido (corrigir) | manter na fila / `ERRO` |
 
 Regras: idempotência por `op_id` (e por registro idêntico); cada operação em transação própria; `UPDATE` com
 `base_version` igual à versão do servidor não gera conflito. Estratégias (`core/src/sync/conflictStrategies.js`):
@@ -74,6 +74,7 @@ Limitação documentada: exclusões feitas por ADMIN não são propagadas aos cl
 | Método | Rota | Descrição |
 |---|---|---|
 | GET | `/medicamento?q=&since=&somente_ativos=` | Todos os medicamentos. `since` = só o que mudou; cabeçalho `X-Sync-Cursor` = cursor da próxima chamada |
+| POST | `/medicamento` | Cadastra medicamento (nome e principio_ativo obrigatórios; autenticado) |
 | GET | `/medicamento/{id}` | Um medicamento |
 | GET | `/ficha/{atendimentoId}/pdf[?inline=1]` | Gera e baixa a Ficha de Atendimento (`application/pdf`) |
 | POST | `/ficha/{atendimentoId}/email` | `{"destinatario":"x@y.com","mensagem":"opcional"}` envia o PDF anexado; sem `destinatario` usa o e-mail da pessoa |
@@ -87,3 +88,18 @@ Medicamentos inseridos direto no PostgreSQL aparecem imediatamente (trigger em `
 ## Tabelas novas na Etapa 2 (migration 004)
 `core.atendimento.profissional_nome / profissional_identificacao` (assinatura do registro) e
 `audit.access_log.client_log_id` (idempotência de `POST /log`). Demais tabelas: ver `ARQUITETURA.md`.
+
+## Cadastro de medicamento
+
+```http
+POST /medicamento
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+```json
+{"nome":"Medicamento Fictício A","principio_ativo":"Substância de demonstração","apresentacao":"Apresentação fictícia","via_administracao":"VO","observacao":"Apenas para teste acadêmico"}
+```
+
+Resposta 201 com o registro criado. A interface usa `/api/medicamentos/remotos` para encaminhar o cadastro ao Business e atualizar o cache local. O formulário simplificado não exige dose máxima e unidade.
+
+A documentação usa exemplos de tipos; o corpo real aparece em **Server response**. As APIs ficam disponíveis pelo túnel SSH das portas 8001–8003.

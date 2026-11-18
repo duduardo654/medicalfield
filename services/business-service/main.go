@@ -24,6 +24,7 @@ type Server struct {
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /medicamento", handle(s.listMedicamentos))
+	mux.HandleFunc("POST /medicamento", handle(s.createMedicamento))
 	mux.HandleFunc("GET /medicamento/{id}", handle(s.getMedicamento))
 	mux.HandleFunc("GET /ficha/{atendimentoId}/pdf", handle(s.fichaPDF))
 	mux.HandleFunc("POST /ficha/{atendimentoId}/email", handle(s.fichaEmail))
@@ -59,7 +60,7 @@ func main() {
 	}
 	s := &Server{cfg: cfg, db: db, audit: newAuditLogger(cfg, db), httpc: &http.Client{Timeout: 12 * time.Second}}
 	srv := &http.Server{
-		Addr: ":" + cfg.Port, Handler: s.routes(),
+		Addr: "127.0.0.1:" + cfg.Port, Handler: s.routes(),
 		ReadHeaderTimeout: 10 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 60 * time.Second,
 	}
 	go func() {

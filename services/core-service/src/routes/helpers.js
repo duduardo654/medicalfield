@@ -1,7 +1,7 @@
 const { z } = require('zod');
 const { ApiError } = require('../middleware/errors');
 
-const uuidSchema = z.string().uuid();
+const uuidSchema = z.guid();
 
 function parseUuid(valor, nome = 'id') {
   if (!uuidSchema.safeParse(valor).success) {

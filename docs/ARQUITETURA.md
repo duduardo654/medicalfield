@@ -1,132 +1,135 @@
-# MedicalField – Arquitetura (versão definitiva)
+# MedicalField — Arquitetura da versão final acadêmica
 
-## 1. Visão geral
+Universidade do Vale do Taquari — Arquiteturas de Software, 2026/B.
+
+## Arquitetura implantada
 
 ```mermaid
 flowchart LR
-  subgraph Cliente["Cliente de Atendimento (dispositivo do socorrista)"]
-    UI[UI web local :3001]
-    SQ[(SQLite local<br/>pessoa, prontuario, atendimento,<br/>medicamento_cache, OUTBOX, log_local)]
+  W[Windows: navegador e pgAdmin] -->|Túnel SSH TCP 22| UI
+  subgraph VM[VM Univates — Ubuntu Linux]
+    UI[Interface integrada Python/FastAPI 127.0.0.1:3000]
+    SQ[(SQLite: cache, fila e logs locais)]
+    A[Auth Python/FastAPI :8001]
+    C[Core Node.js/Express :8002]
+    B[Business Go :8003]
+    PG[(PostgreSQL 18: auth / core / business / audit)]
     UI --> SQ
+    UI -->|REST + JWT| A
+    UI -->|REST + JWT| C
+    UI -->|REST + JWT| B
+    B -->|REST + JWT| C
+    A --> PG
+    C --> PG
+    B --> PG
   end
-  subgraph Portal["Portal Administrativo :3000"]
-    PUI[UI web admin]
-  end
-  subgraph VM["VM Univates"]
-    AUTH["auth-service :8001<br/>Python / FastAPI"]
-    CORE["core-service :8002<br/>Node.js / Express"]
-    BIZ["business-service :8003<br/>Go"]
-    PG[(PostgreSQL<br/>schemas auth, core, business, audit)]
-    MAIL[Mailpit SMTP :1025 / UI :8025]
-  end
-  UI -- "ONLINE: REST + JWT" --> AUTH & CORE & BIZ
-  PUI -- "REST + JWT" --> AUTH & CORE & BIZ
-  CORE -. "valida JWT localmente" .- AUTH
-  BIZ -- "GET dados do atendimento (token repassado)" --> CORE
-  BIZ -- SMTP --> MAIL
-  AUTH & CORE & BIZ --> PG
+  B -->|SMTP TLS 587| G[Gmail / Google Workspace]
 ```
 
-*Modo OFFLINE:* o cliente **não** chama nenhum serviço; lê e grava só no SQLite e enfileira
-cada operação na tabela `outbox`. Ao voltar para ONLINE, o `ConnectivityMonitor` (Observer)
-notifica o `SyncManager`, que faz **push** da outbox e depois **pull** dos dados novos.
+A interface integrada reúne Atendimento, Administração (perfil ADMIN) e Medicamentos. O navegador usa uma única porta; as três APIs independentes permanecem acessíveis via túnel para a demonstração Swagger. O PostgreSQL é único, separado em schemas; não há bancos fisicamente independentes por serviço. A instância implantada mantém o SQLite no mesmo servidor da GUI, em arquivo separado do PostgreSQL. OFFLINE é o simulador de rede da interface, não perda física da conexão do Windows com a VM. Se o túnel cair, a GUI hospedada na VM não fica acessível no navegador. Para offline físico seria necessário executar o cliente no dispositivo (não adotado na configuração aprovada).
 
-## 2. Tecnologias e justificativas
-
-| Componente | Tecnologia | Por quê |
-|---|---|---|
-| auth-service | **Python 3.12 + FastAPI** | Swagger automático, bcrypt/JWT maduros, código curto |
-| core-service | **Node.js 22 + Express** | CRUD simples e rápido; mesma linguagem do cliente |
-| business-service | **Go 1.22** | 3ª linguagem; binário único (fácil na VM); PDF (`go-pdf/fpdf`) e SMTP na stdlib |
-| Banco central | **PostgreSQL 16** | Exigido; um banco, um *schema* por responsabilidade |
-| Banco local | **SQLite** (`better-sqlite3`) | Exigido; arquivo único embarcado no cliente |
-| Cliente / Portal | **Node + HTML/JS puro** servidos localmente | Sem build, sem framework; roda com um comando |
-| E-mail (testes) | **Mailpit** | SMTP de testes gratuito com UI web para mostrar o anexo |
-| Process manager (VM) | **systemd** | Já existe na VM; reinício automático após reboot |
-
-Decisões de simplificação: um único PostgreSQL com *schemas* (em vez de 3 instâncias);
-JWT HS256 com segredo compartilhado (validação local, sem chamada ao auth a cada request);
-sem API Gateway (cada serviço expõe a própria porta); sem Docker.
-
-## 3. Responsabilidades
-
-| Serviço | Responsável por | Endpoints (PDF do professor) |
-|---|---|---|
-| auth | Login, JWT, identificação do profissional | `POST /auth/login` |
-| core | Pessoa, prontuário, atendimento, **sincronização**, recepção de logs offline | `GET/POST /pessoa`, `GET/POST /prontuario`, `GET /prontuario/{id}`, `POST /atendimento`, `GET /atendimento/{id}`, `POST /log` + `POST /sync/push`, `GET /sync/pull` |
-| business | Medicamentos, PDF da ficha, e-mail | `GET /medicamento` + `GET /ficha/{id}/pdf`, `POST /ficha/{id}/email` |
-
-> `{id}` em `/prontuario/{id}` e `/atendimento/{id}` = **id da pessoa**, como no enunciado.
-
-## 4. Modelo PostgreSQL (database/migrations)
-
-```
-auth.profissional(id PK, tipo_registro, identificacao UNIQUE, nome, email, perfil, senha_hash, ativo, ultimo_login)
-
-core.pessoa(id PK uuid, nome, cpf UNIQUE, data_nascimento, sexo, telefone, email, contato_emergencia,
-            criado_por, origem, client_created_at, client_updated_at, version, created_at, updated_at)
-core.prontuario(id PK, pessoa_id FK UNIQUE -> pessoa, tipo_sanguineo, alergias, condicoes_cronicas, ...)
-core.atendimento(id PK, prontuario_id FK, pessoa_id FK, profissional_id, data_hora, queixa_principal,
-            sinais vitais (PA, FC, FR, SpO2, temp, glicemia), glasgow_ocular/verbal/motor + glasgow_total (gerado),
-            triagem_manchester, triagem_start, conduta, encaminhamento, origem, ...)
-core.atendimento_medicamento(id PK, atendimento_id FK, medicamento_id, nome, dose, via, horario)
-core.id_alias(local_id PK, entidade, canonical_id)            -- duplicatas fundidas na sincronização
-core.sync_operation(op_id PK, entidade, operacao, registro_id, profissional_id, resultado, detalhe jsonb)
-
-business.medicamento(id PK, nome, principio_ativo, apresentacao, via_administracao, dose_max_unitaria, ..., updated_at)
-business.email_enviado(id PK, atendimento_id, destinatario, enviado_por, sucesso, erro)
-
-audit.access_log(id PK, servico, ocorrido_em, ip_cliente, profissional_id, metodo, rota, status_code, tempo_ms, origem, detalhe)
-```
-
-Regras-chave: **PK UUID gerada no cliente** (idempotência); **sem FK entre schemas** (serviços
-independentes; `profissional_id` e `medicamento_id` são referências lógicas); FKs *dentro* do `core`
-garantem a integridade pessoa → prontuário → atendimento.
-
-## 5. Modelo SQLite (cliente) – a ser criado na Etapa 5
-
-`pessoa`, `prontuario`, `atendimento`, `atendimento_medicamento` (mesmas colunas do servidor, mais
-`sync_status` = `PENDING | SYNCED | CONFLICT | ERROR` e `synced_at`); `medicamento_cache`;
-`outbox(op_id, entidade, operacao, registro_id, payload, profissional_id, created_at, status, tentativas, ultimo_erro)`;
-`sync_state(chave, valor)` (cursor do pull); `log_local` (acessos feitos offline, enviados via `POST /log`).
-
-Registros locais × oficiais: o que está `PENDING` só existe no SQLite; só vira `SYNCED` após o
-servidor responder que persistiu.
-
-## 6. Sincronização (resumo)
-
-1. **Push**: envia a outbox em ordem (pessoa → prontuário → atendimento) em `POST /sync/push`; cada operação tem `op_id`.
-2. Servidor, por operação e em transação: já viu o `op_id`? → `DUPLICATE` (idempotente). Mesmo `id`? → compara
-   `client_updated_at` (Strategy). Mesmo CPF com `id` diferente? → `MERGED` + `id_alias`.
-3. Resposta por operação → cliente marca `SYNCED` **somente** nas confirmadas; falhas ficam na fila com retentativa (backoff).
-4. **Pull**: `GET /sync/pull?since=` (core) + `GET /medicamento?since=` (business) atualizam o SQLite.
-5. `POST /log` envia o `log_local` ao core (grava em `audit.access_log` com `origem='OFFLINE'`).
-
-## 7. Padrões de projeto
-
-| # | Padrão | Onde | Problema que resolve |
-|---|---|---|---|
-| 1 | Repository | Cliente (`Local*Repository`/`Remote*Repository`) e serviços (`ProfissionalRepository`…) | UI/regras não conhecem SQL nem HTTP |
-| 2 | Strategy | `ConflictResolver` (LastWriteWins, ServerWins, FieldMerge) | Troca o algoritmo de resolução sem mexer no sync |
-| 3 | Observer | `ConnectivityMonitor` → `SyncManager`/UI | Dispara a sincronização ao voltar ONLINE |
-| 4 | Chain of Responsibility | Middlewares: CORS → log de acesso → JWT → handler | Cada preocupação transversal em um elo |
-| 5 | Factory | `RepositoryFactory` (escolhe Local/Remote conforme o modo) e `ConflictStrategyFactory` | Centraliza a criação e o if ONLINE/OFFLINE |
-| 6 | Facade | `SyncService` (push + pull + logs) | A UI chama um método; a complexidade fica escondida |
-| 7 | Singleton | Pool de conexões (`db.py`, `pg.Pool`, `sql.DB`) | Uma instância de conexão por processo |
-| + | Outbox *(padrão de integração)* | Tabela `outbox` | Garante entrega *at-least-once* + idempotência |
-
-Já implementados: Repository, Singleton e Chain of Responsibility (auth e core); Strategy e Factory (`core/src/sync/conflictStrategies.js`); Adapter (`business/mailer.go` isola o SMTP). Faltam no cliente: Observer, Facade e Repository local/remoto.
-
-## 8. Cobertura dos requisitos do PDF do professor
-
-| Requisito | Situação |
+| Componente | Tecnologia / ambiente |
 |---|---|
-| 3 serviços em linguagens distintas | Python ✅ + Node.js ✅ + Go ✅ |
-| Persistência dual (central + local) | PostgreSQL ✅ · SQLite (Etapa 5) |
-| Rotas autenticadas, exceto login | ✅ auth e core (`/docs` é a única exceção, desligável com `ENABLE_DOCS=false`) |
-| Logs: data/hora, IP, profissional, método, rota, status, ms | ✅ auth e core (arquivo + `audit.access_log`) |
-| Glasgow, Manchester, START, medicamentos administrados | ✅ modelados em `core.atendimento` |
-| Receber dados do Portal (pull) e medicamentos inseridos via SQL | ✅ `updated_at` + trigger em `business.medicamento` |
-| `POST /log` (logs offline) | ✅ core (idempotente) |
-| PDF e e-mail com anexo | ✅ business (Go) + Mailpit |
-| GUIs, simulador ONLINE/OFFLINE, Swagger unificado, deploy | Etapas 4 a 7 |
+| Auth | Python 3.14 / FastAPI / bcrypt / JWT HS256 |
+| Core | Node.js 22 / Express / pg / Zod (migração para 4.6.7) |
+| Business | Go 1.26 / net/http / lib/pq / go-pdf/fpdf / SMTP |
+| Interface | Python/FastAPI + HTML/CSS/JavaScript; porta 3000 |
+| Central | PostgreSQL 18 |
+| Cache e fila | SQLite via módulo sqlite3 da biblioteca padrão Python |
+| Implantação | Ubuntu 26.04 LTS x86_64, systemd, SSH; sem Docker |
+
+## Comunicação e responsabilidades
+
+- Auth autentica por identificação profissional e senha; retorna perfil e JWT. Os consumidores validam HS256 com segredo compartilhado e issuer `medicalfield-auth`.
+- Core mantém pessoas, prontuários, atendimentos, sincronização e logs offline; consultas REST autenticadas. As operações administrativas da GUI exigem perfil ADMIN. Nas APIs Core originais os PUT aceitam qualquer profissional autenticado; DELETE exige ADMIN.
+- Business lista e cadastra medicamentos, consulta a ficha no Core e gera PDF; envia anexo via SMTP com senha de aplicativo do Google configurada no `.env`.
+- A GUI faz proxy das chamadas e verifica o JWT. Em OFFLINE as rotas de registros usam SQLite; login requer serviço central e token válido. As documentações Swagger e o login são exceções públicas à autenticação, mas ficam atrás do túnel SSH na implantação restrita.
+
+## Modelagem dos bancos
+
+Fonte de verdade: `database/migrations/*.sql` e `applications/attendance-client/server.py::init_db`. O modelo relacional simplificado a seguir representa as chaves e relacionamentos efetivos.
+
+```mermaid
+erDiagram
+    PESSOA ||--o| PRONTUARIO : possui
+    PESSOA ||--o{ ATENDIMENTO : recebe
+    PRONTUARIO ||--o{ ATENDIMENTO : agrupa
+    ATENDIMENTO ||--o{ ATENDIMENTO_MEDICAMENTO : registra
+    PESSOA {
+        uuid id PK
+        text nome
+        text cpf UK
+    }
+    PRONTUARIO {
+        uuid id PK
+        uuid pessoa_id FK,UK
+    }
+    ATENDIMENTO {
+        uuid id PK
+        uuid pessoa_id FK
+        uuid prontuario_id FK
+        uuid profissional_id
+    }
+    ATENDIMENTO_MEDICAMENTO {
+        uuid id PK
+        uuid atendimento_id FK
+        uuid medicamento_id
+    }
+```
+
+PostgreSQL:
+
+| Schema e tabela | Campos principais e função |
+|---|---|
+| auth.profissional | id UUID PK; tipo_registro, identificacao UNIQUE, nome, email, perfil, senha_hash, ativo, ultimo_login |
+| core.pessoa | id UUID PK, nome, cpf UNIQUE, data_nascimento, sexo, telefone, email, contato_emergencia, criado_por, origem, client_created_at, client_updated_at, version, created_at, updated_at |
+| core.prontuario | id UUID PK, pessoa_id FK UNIQUE, tipo_sanguineo, alergias, condicoes_cronicas, medicamentos_uso_continuo, observacoes, origem, criado_por, datas e version |
+| core.atendimento | id UUID PK, pessoa_id FK, prontuario_id FK, profissional_id, profissional_nome/identificacao, data_hora, queixa_principal, descricao, local_ocorrencia, sinais vitais, Glasgow (total calculado), Manchester, START, conduta, encaminhamento, origem, datas e version |
+| core.atendimento_medicamento | id UUID PK, atendimento_id FK, medicamento_id (referência lógica), nome, dose, via, horario |
+| core.id_alias | local_id UUID PK, entidade, canonical_id, criado_em |
+| core.sync_operation | op_id UUID PK, entidade, operacao, registro_id, profissional_id, sincronizado_por, resultado, detalhe JSONB, client_created_at, recebido_em |
+| business.medicamento | id UUID PK, nome, principio_ativo, apresentacao, via_administracao, dose_max_unitaria, unidade_dose, contraindicacoes, observacao, ativo, created_at, updated_at |
+| business.email_enviado | histórico de envio por atendimento, destinatário, profissional e resultado |
+| audit.access_log | data/hora, serviço, IP, profissional, método, rota, status_code, tempo_ms, origem, detalhe, client_log_id |
+
+O relacionamento pessoa–prontuário é um para zero ou um; prontuário–atendimento e atendimento–medicamento são um para muitos. Referências entre schemas são lógicas em vez de FKs entre serviços. As FKs internas do Core impedem registros órfãos.
+
+SQLite (`applications/attendance-client/data/medicalfield.sqlite3`):
+
+| Tabela | Estrutura |
+|---|---|
+| pessoa | id TEXT PK, data JSON em TEXT, origem, status, atualizado_em |
+| prontuario | id PK, pessoa_id FK, data, origem, status, atualizado_em |
+| atendimento | id PK, pessoa_id FK, prontuario_id FK, data, origem, status, atualizado_em |
+| medicamento | id PK, data JSON em TEXT |
+| outbox | op_id PK, entidade, registro_id, operacao, profissional_id, criado_em, payload JSON, status, tentativas, erro |
+| metadata | chave PK, valor (modo online e cursor) |
+| logs_offline | id PK, ocorrido_em, metodo, rota, status_code, tempo_ms, detalhe, status |
+
+## Sincronização manual e consistência
+
+1. OFFLINE: salvar entidade e outbox na mesma transação SQLite, com UUID, autor, instante e origem OFFLINE. Não envia registros centrais.
+2. ONLINE: um novo cadastro envia somente sua própria operação imediatamente; pendências anteriores ficam separadas. Se não houver confirmação, conserva a fila.
+3. Troca OFFLINE → ONLINE apenas habilita o botão. Login e troca de modo não disparam sincronização.
+4. Clique em Sincronizar agora: envia pendências em ordem por `POST /sync/push`, recebe mudanças por `GET /sync/pull?since=...`, envia logs por `POST /log` e atualiza cache de medicamentos via API Business.
+5. Core processa cada operação em transação, com `op_id` único; resultados positivos APPLIED, DUPLICATE, MERGED e CONFLICT_RESOLVED permitem marcar `SINCRONIZADO`. Erros ficam pendentes ou com status ERRO.
+6. O servidor tem Strategy de conflitos (LAST_WRITE_WINS, SERVER_WINS, FIELD_MERGE) e tabela de aliases para fusão de duplicidades. O cliente atual não reescreve todos os IDs locais em caso de MERGED; exclusões administrativas não são propagadas pelo pull. Evitar afirmar convergência completa para esses casos. A demonstração com registros novos e reenvio idempotente foi validada pelo usuário.
+
+## Padrões de projeto identificados no código
+
+| Padrão | Implementação | Finalidade |
+|---|---|---|
+| Repository | `services/auth-service/app/repositories.py`; `services/core-service/src/repositories/` | Isolar consultas SQL e operações de persistência dos handlers |
+| Strategy | `services/core-service/src/sync/conflictStrategies.js` | Selecionar algoritmo de resolução de conflitos |
+| Observer (eventos de UI) | `applications/attendance-client/static/app.js`: `mode.onchange`, `updateMode`, `sync.onclick` | Observar mudança do seletor e atualizar estado visual; NÃO dispara fila automaticamente, conforme decisão da versão final |
+| Factory | `ConflictStrategyFactory.forEntity` | Selecionar instância de Strategy por entidade/configuração |
+| Chain of Responsibility | `core/src/app.js`, middlewares Auth e Business | Encadear auditoria, autenticação, validação e tratamento das requisições |
+| Facade | `SyncService` do Core e rota `synchronize` do cliente | Encapsular envio, persistência e recebimento para a interface |
+| Singleton (adicional) | `core/src/db.js`, `auth/app/db.py` | Reutilizar um pool de conexões por processo |
+| Outbox (integração adicional) | SQLite `outbox` + `core.sync_operation` | Conservar operações e possibilitar reenvio idempotente |
+
+O Observer acima é o mecanismo de eventos nativo da interface, não uma classe Observer autoral nem um sincronizador automático. A sugestão de disparo automático do enunciado foi substituída por sincronização manual por decisão do aluno. O fluxo sugerido no roteiro é demonstrável com o seletor e o botão.
+
+## Requisitos e limites acadêmicos
+
+Validados pelo aluno: login/JWT (401 sem token), CRUD central, recebimento de medicamentos, cadastro offline, sincronização manual, idempotência, logs, PDF, e-mail real, VM e start/stop systemd. Cadastro de medicamentos pelo portal também validado. O PDF oficial contém o roteiro de 17 passos; não foi criado um roteiro substituto. Para a entrega, usar este modelo, `docs/API.md`, `docs/IMPLANTACAO.md` e o PDF original da disciplina. Não utilizar dados reais de pacientes, não publicar credenciais, não alegar prontidão clínica ou certificação LGPD. Apenas simulação de rede validada; segurança e migração Zod finais dependem dos testes na VM após aplicar a atualização.
