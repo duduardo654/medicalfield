@@ -129,7 +129,3 @@ SQLite (`applications/attendance-client/data/medicalfield.sqlite3`):
 | Outbox (integração adicional) | SQLite `outbox` + `core.sync_operation` | Conservar operações e possibilitar reenvio idempotente |
 
 O Observer acima é o mecanismo de eventos nativo da interface, não uma classe Observer autoral nem um sincronizador automático. A sugestão de disparo automático do enunciado foi substituída por sincronização manual por decisão do aluno. O fluxo sugerido no roteiro é demonstrável com o seletor e o botão.
-
-## Requisitos e limites acadêmicos
-
-Validados pelo aluno: login/JWT (401 sem token), CRUD central, recebimento de medicamentos, cadastro offline, sincronização manual, idempotência, logs, PDF, e-mail real, VM e start/stop systemd. Cadastro de medicamentos pelo portal também validado. O PDF oficial contém o roteiro de 17 passos; não foi criado um roteiro substituto. Para a entrega, usar este modelo, `docs/API.md`, `docs/IMPLANTACAO.md` e o PDF original da disciplina. Não utilizar dados reais de pacientes, não publicar credenciais, não alegar prontidão clínica ou certificação LGPD. Apenas simulação de rede validada; segurança e migração Zod finais dependem dos testes na VM após aplicar a atualização.
