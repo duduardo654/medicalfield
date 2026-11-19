@@ -93,13 +93,17 @@ def professional(authorization: str | None):
         raise HTTPException(401, 'Token inválido.')
 
 
-def online(db):
+def online(db, client_mode=None):
+    # Interface integrada: o modo é individual por aba/sessão de navegador.
+    # Sem cabeçalho, mantém compatibilidade com clientes antigos e testes.
+    if client_mode in ('online', 'offline'):
+        return client_mode == 'online'
     value = db.execute("SELECT valor FROM metadata WHERE chave='online'").fetchone()
     return not value or value['valor'] == '1'
 
 
-def require_online(db):
-    if not online(db):
+def require_online(db, client_mode=None):
+    if not online(db, client_mode):
         raise HTTPException(409, 'Modo OFFLINE: acesso ao servidor bloqueado.')
 
 
@@ -187,51 +191,55 @@ def gateway_login(credentials: Login):
 
 
 @app.get('/api/central/{entity}')
-def central_list(entity: str, authorization: str | None = Header(default=None)):
+def central_list(entity: str, authorization: str | None = Header(default=None),
+                 x_client_mode: str | None = Header(default=None)):
     user = professional(authorization)
     if user.get('perfil') != 'ADMIN':
         raise HTTPException(403, 'Somente administradores podem visualizar os dados oficiais.')
     if entity not in ('pessoa', 'prontuario', 'atendimento', 'medicamento'):
         raise HTTPException(404, 'Entidade inválida')
     with database() as db:
-        require_online(db)
+        require_online(db, x_client_mode)
     service = 'business' if entity == 'medicamento' else 'core'
     return gateway(service, '/' + entity, 'GET', authorization)
 
 
 @app.put('/api/central/{entity}/{record_id}')
 def central_update(entity: str, record_id: uuid.UUID, body: dict,
-                   authorization: str | None = Header(default=None)):
+                   authorization: str | None = Header(default=None),
+                 x_client_mode: str | None = Header(default=None)):
     user = professional(authorization)
     if user.get('perfil') != 'ADMIN':
         raise HTTPException(403, 'Somente administradores.')
     if entity not in ('pessoa', 'prontuario', 'atendimento'):
         raise HTTPException(404, 'Entidade inválida')
     with database() as db:
-        require_online(db)
+        require_online(db, x_client_mode)
     path = '/atendimento/detalhe/' if entity == 'atendimento' else '/' + entity + '/'
     return gateway('core', path + str(record_id), 'PUT', authorization, body)
 
 
 @app.delete('/api/central/{entity}/{record_id}')
 def central_delete(entity: str, record_id: uuid.UUID,
-                   authorization: str | None = Header(default=None)):
+                   authorization: str | None = Header(default=None),
+                 x_client_mode: str | None = Header(default=None)):
     user = professional(authorization)
     if user.get('perfil') != 'ADMIN':
         raise HTTPException(403, 'Somente administradores.')
     if entity not in ('pessoa', 'prontuario', 'atendimento'):
         raise HTTPException(404, 'Entidade inválida')
     with database() as db:
-        require_online(db)
+        require_online(db, x_client_mode)
     path = '/atendimento/detalhe/' if entity == 'atendimento' else '/' + entity + '/'
     return gateway('core', path + str(record_id), 'DELETE', authorization)
 
 
 @app.get('/api/ficha/{record_id}/pdf')
-def proxy_pdf(record_id: uuid.UUID, authorization: str | None = Header(default=None)):
+def proxy_pdf(record_id: uuid.UUID, authorization: str | None = Header(default=None),
+                 x_client_mode: str | None = Header(default=None)):
     professional(authorization)
     with database() as db:
-        require_online(db)
+        require_online(db, x_client_mode)
     return gateway('business', '/ficha/' + str(record_id) + '/pdf', 'GET', authorization)
 
 
@@ -241,51 +249,69 @@ class EmailPayload(BaseModel):
 
 @app.post('/api/ficha/{record_id}/email')
 def proxy_email(record_id: uuid.UUID, body: EmailPayload,
-                authorization: str | None = Header(default=None)):
+                authorization: str | None = Header(default=None),
+                 x_client_mode: str | None = Header(default=None)):
     professional(authorization)
     with database() as db:
-        require_online(db)
+        require_online(db, x_client_mode)
     return gateway('business', '/ficha/' + str(record_id) + '/email', 'POST', authorization, body.model_dump())
 
 
-@app.get('/api/medicamentos/remotos')
-def proxy_medicamentos(authorization: str | None = Header(default=None)):
+@app.post('/api/medicamentos/remotos')
+def create_medicamento(body: dict, authorization: str | None = Header(default=None),
+                 x_client_mode: str | None = Header(default=None)):
     professional(authorization)
     with database() as db:
-        require_online(db)
+        require_online(db, x_client_mode)
+    return gateway('business', '/medicamento', 'POST', authorization, body)
+
+
+@app.get('/api/medicamentos/remotos')
+def proxy_medicamentos(authorization: str | None = Header(default=None),
+                 x_client_mode: str | None = Header(default=None)):
+    professional(authorization)
+    with database() as db:
+        require_online(db, x_client_mode)
     return gateway('business', '/medicamento', 'GET', authorization)
 
 
 @app.get('/api/state')
-def state(authorization: str | None = Header(default=None)):
+def state(authorization: str | None = Header(default=None),
+                 x_client_mode: str | None = Header(default=None)):
     professional(authorization)
     with database() as db:
         count = db.execute("SELECT COUNT(*) n FROM outbox WHERE status != 'SINCRONIZADO'").fetchone()['n']
-        return {'online': online(db), 'pendentes': count}
+        return {'online': online(db, x_client_mode), 'pendentes': count}
 
 
 @app.post('/api/network')
-def set_mode(mode: Mode, authorization: str | None = Header(default=None)):
+def set_mode(mode: Mode, authorization: str | None = Header(default=None),
+                 x_client_mode: str | None = Header(default=None)):
     professional(authorization)
-    with database() as db:
-        db.execute("INSERT INTO metadata(chave,valor) VALUES('online',?) ON CONFLICT(chave) DO UPDATE SET valor=excluded.valor",
-                   ('1' if mode.online else '0',))
+    # Navegadores modernos enviam X-Client-Mode e não compartilham modo global.
+    # Compatibilidade com clientes antigos: mantém a opção de modo persistente.
+    if x_client_mode is None:
+        with database() as db:
+            db.execute("INSERT INTO metadata(chave,valor) VALUES('online',?) ON CONFLICT(chave) DO UPDATE SET valor=excluded.valor",
+                       ('1' if mode.online else '0',))
     return {'online': mode.online}
 
 
 # Rotas específicas de medicamentos devem preceder a rota genérica /api/{entity}.
 @app.get('/api/medicamento')
-def local_medicamentos(authorization: str | None = Header(default=None)):
+def local_medicamentos(authorization: str | None = Header(default=None),
+                 x_client_mode: str | None = Header(default=None)):
     professional(authorization)
     with database() as db:
         return [json.loads(r['data']) for r in db.execute('SELECT data FROM medicamento ORDER BY id')]
 
 
 @app.post('/api/medicamento/cache')
-def cache_medicamentos(body: list[dict], authorization: str | None = Header(default=None)):
+def cache_medicamentos(body: list[dict], authorization: str | None = Header(default=None),
+                 x_client_mode: str | None = Header(default=None)):
     professional(authorization)
     with database() as db:
-        require_online(db)
+        require_online(db, x_client_mode)
         for item in body:
             db.execute('INSERT INTO medicamento(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
                        (item['id'], json.dumps(item, ensure_ascii=False)))
@@ -293,17 +319,25 @@ def cache_medicamentos(body: list[dict], authorization: str | None = Header(defa
 
 
 @app.get('/api/{entity}')
-def list_records(entity: str, authorization: str | None = Header(default=None)):
+def list_records(entity: str, authorization: str | None = Header(default=None),
+                 x_client_mode: str | None = Header(default=None)):
     professional(authorization)
     if entity not in ('pessoa', 'prontuario', 'atendimento'):
         raise HTTPException(404, 'Entidade inválida')
     with database() as db:
+        # Em ONLINE, ocultar pendentes do cache. Não equivale a consultar
+        # o banco oficial: para isso existe /api/central/{entity}.
+        query = f'SELECT * FROM {entity}'
+        if online(db, x_client_mode):
+            query += " WHERE status='SINCRONIZADO'"
+        query += ' ORDER BY atualizado_em DESC'
         return [dict(json.loads(r['data']), _status=r['status'], _origem=r['origem'])
-                for r in db.execute(f'SELECT * FROM {entity} ORDER BY atualizado_em DESC')]
+                for r in db.execute(query)]
 
 
 @app.post('/api/record')
-def new_record(body: Record, authorization: str | None = Header(default=None)):
+def new_record(body: Record, authorization: str | None = Header(default=None),
+                 x_client_mode: str | None = Header(default=None)):
     user = professional(authorization)
     entity = body.entidade
     if entity not in ('pessoa', 'prontuario', 'atendimento'):
@@ -331,14 +365,14 @@ def new_record(body: Record, authorization: str | None = Header(default=None)):
         if entity == 'prontuario' and db.execute('SELECT 1 FROM prontuario WHERE pessoa_id=?', (data['pessoa_id'],)).fetchone():
             raise HTTPException(409, 'Esta pessoa já possui prontuário.')
         # Origem representa o modo de criacao; nao o meio de transporte da Outbox.
-        modo_criacao = 'ONLINE' if online(db) else 'OFFLINE'
+        modo_criacao = 'ONLINE' if online(db, x_client_mode) else 'OFFLINE'
         data['origem_registro'] = modo_criacao
         save_local(db, entity, data, origem=modo_criacao)
         db.execute('''INSERT INTO outbox(op_id,entidade,registro_id,operacao,profissional_id,criado_em,payload,status)
             VALUES (?,?,?,?,?,?,?,?)''',
             (str(uuid.uuid4()), entity, data['id'], 'CREATE', user['sub'], now,
              json.dumps(data, ensure_ascii=False), 'PENDENTE'))
-        if not online(db):
+        if not online(db, x_client_mode):
             db.execute('''INSERT INTO logs_offline(id,ocorrido_em,metodo,rota,status_code,tempo_ms,detalhe)
                 VALUES(?,?,?,?,?,?,?)''', (str(uuid.uuid4()), now, 'POST', '/' + entity, 201, 0,
                                        'Registro persistido localmente em modo OFFLINE'))
@@ -348,7 +382,7 @@ def new_record(body: Record, authorization: str | None = Header(default=None)):
     confirmed = False
     issue = None
     with database() as db:
-        enabled = online(db)
+        enabled = online(db, x_client_mode)
         entry = db.execute('SELECT * FROM outbox WHERE entidade=? AND registro_id=?',
                            (entity, data['id'])).fetchone()
     if enabled:
@@ -377,11 +411,12 @@ def new_record(body: Record, authorization: str | None = Header(default=None)):
 
 
 @app.post('/api/sync')
-def synchronize(authorization: str | None = Header(default=None)):
+def synchronize(authorization: str | None = Header(default=None),
+                 x_client_mode: str | None = Header(default=None)):
     user = professional(authorization)
     token = authorization[7:]
     with database() as db:
-        require_online(db)
+        require_online(db, x_client_mode)
         entries = db.execute("SELECT * FROM outbox WHERE status != 'SINCRONIZADO' ORDER BY criado_em, rowid").fetchall()
         results = []
         for entry in entries:
